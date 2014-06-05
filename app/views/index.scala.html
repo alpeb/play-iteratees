@@ -1,0 +1,25 @@
+@(metadata: Option[models.Mp3File.Metadata] = None)
+<!DOCTYPE html>
+<html>
+    <head>
+      @if(metadata.nonEmpty) {
+        <meta http-equiv="Content-Type" content="text/html; charset=@metadata.get.textEncoding">
+      }
+      <title>Activator-Play-Iteratees -- MP3 metadata parser</title>
+    </head>
+    <body>
+      @if(metadata.nonEmpty) {
+        <h2>File Metadata:</h2>
+        <b>id3 version:</b> @metadata.get.id3Version<br>
+        <b>title:</b> @metadata.get.title<br>
+        <b>artist:</b> @metadata.get.artist<br>
+        <b>album:</b> @metadata.get.album<br>
+      }
+      <h2 style="margin-bottom:0">Please submit your MP3 file:</h2>
+      <div style="margin-bottom:10px">(You can use the sample files under the test directory)</div>
+      <form method="post" enctype="multipart/form-data">
+        <input type="file" name="file">
+        <input type="submit">
+      </form>
+    </body>
+</html>

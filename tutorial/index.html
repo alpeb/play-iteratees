@@ -1,0 +1,119 @@
+<html>
+<head>
+  <title>Activator-Play-Iteratees -- MP3 metadata parser</title>
+</head>
+<body>
+<div>
+  <h2>Reactive Stream Processing</h2>
+  <p>
+    Throughout this tutorial we will explore how to use <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Iteratee">Iteratees</a>, a nifty abstraction provided in the Play framework to handle streams reactively.
+  </p>
+
+  <p>
+    According to the <a href="http://www.playframework.com/documentation/2.3.x/Iteratees">manual</a>:
+    <p>
+      "Progressive Stream Processing and manipulation is an important task in modern Web Programming, starting from chunked upload/download to Live Data Streams consumption, creation, composition and publishing through different technologies including Comet and WebSockets."
+    </p>
+    Inside the Play framework, Iteratees are used among other things to build body parsers, which consume the raw incoming data and transform it appropriately so that it is delivered to an <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.mvc.Action">Action</a>, that receives it aptly wrapped in a <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.mvc.Request">Request</a>. The Request's body will be typed according to the transformed data and can contain for example json, xml, multipart form data or a URL-encoded form.
+  </p>
+  <p>
+    You can build your own custom body parsers to pre-process incoming data before delivering it to an Action, and that's exactly what we're gonna do here.
+  </p>
+</div>
+
+<div>
+  <h2>An Efficient MP3 Metadata Parser</h2>
+  <p>
+    This example will allow you to upload an MP3 file and see as a result its metadata (title, author and album).
+  </p>
+  <p>
+    This information is encoded inside the file following the ID3 specification. In this example we'll take care of the <a href="http://id3.org/id3v2-00">ID3v2.2</a> and <a href="http://id3.org/id3v2.3.0">ID3v2.3</a> versions of the spec, which are the most common.
+  </p>
+  <p>
+    This metadata (also referred as "tag") is located at the beginning of the file. Our reactive approach through Iteratees fits particularly well this scenario, since we can consume just enough bytes to build the metadata and discard the rest of the file, stopping the file upload in its tracks.<br>
+    So even with very large files we can show the metadata very quickly without having to wait for the full file to be uploaded and stored in memory, unlike with traditional non-reactive web frameworks.
+  </p>
+</div>
+
+<div>
+  <h2>Iteratee, Enumeratee, Enumerator</h2>
+  <p>
+    This app declares just one controller in <a href="#code/app/controllers/Application.scala" class="shortcut">Application.scala</a>.<br>
+    The index Action just displays the initial form. The upload Action processes the file upload using the <code>mp3MetadataParser</code> custom body parser defined above.
+  </p>
+  <p>
+    Building a custom body parser requires using the <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.mvc.BodyParser$">BodyParser</a> object, passing a function that returns an instance of:
+    <pre>
+      Iteratee[Array[Byte], Either[Result, T]]
+    </pre>
+    We'll explain Iteratees more in detail in the next section, but for the moment understand that these types imply the Iteratee will consume an array of bytes as its incoming data stream (the file upload coming from the browser) and it will produce either a <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.mvc.Result">Result</a> instance if something goes wrong (usually a <code>BadRequest</code> object) or an instance of type T with the outcome of the computation (in our case the MP3 metadata) that is used inside the Action using this body parser.
+  </p>
+  <p>
+    All the Iteratees we use in this tutorial are typed <code>Iteratee[Byte, A]</code> (where A varies according to each case). Note the consumed stream is of type <code>Byte</code> instead of <code>Array[Byte]</code>, because for this example it was easier to reason one byte at a time instead of having to deal with the buffering and intermediate state handling that the <code>Array[Byte]</code> approach would imply.
+  </p>
+  <p>
+    So how can we adapt a stream of <code>Array[Byte]</code> to a stream of <code>Byte</code>? This is exactly what <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Enumeratee">Enumeratee[From, To]</a> is for. When used with an Iteratee (the proper term is to "transform", with an alias operator &>>), it will transform the stream of type <code>From</code> into a stream of type <code>To</code>.<br>
+    We need to build an <code>Enumeratee[Array[Byte], Byte]</code>, as shown in the <code>toBytes</code> val, with <code>mapInputFlatten</code>. This Enumeratee method allows us to declare how to massage the stream chunks that are expressed as <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Input">Input</a> subclasses (more about that later) to produce the desired output to be consumed by an Iteratee. This method requires that we return new instances of Enumerator. An <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Enumerator">Enumerator</a> is simply a way to encapsulate data to be consumed by Iteratees.<br>
+    The gist of our transformation happens when we call:
+    <pre>
+      Enumerator[Byte](arr: _*)
+    </pre>
+    Here the array of bytes received from the stream is fed as a list of arguments to the Enumerator's apply method, thus "flattening" the array and producing the desired stream of just bytes.
+  </p>
+  <p>
+    In <a href="#code/app/controllers/Application.scala:19" class="shortcut">Application.scala:19</a> we see how our <code>toBytes</code> Enumeratee transforms the <a href="#code/app/models/Mp3File.scala:37" class="shortcut">Mp3File.tagParser</a> Iteratee which is our main workhorse taking care of building the MP3 metadata and that we'll see in detail in a following section. For it to be more general, this Iteratee returns an instance of <code>Iteratee[Byte, Metadata]</code>. That explains why we need to call <code>map(Right(_))</code> on it, to tranform its product into the required <code>Either[Result, A]</code>.<br>
+    Also notice there is no error handling here in the controller. We'll see <a href="#code/app/models/Mp3File.scala" class="shortcut">Mp3File.tagParser</a> handles errors by producing an <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Error$">Error</a> Iteratee. When the Play framework runtime runs into that, it throws a <code>RuntimException</code> that the user would see in their browser through the usual Play error template. There are ways to handle this more appropriately and have the Iteratee produce a Left instance that we can react to in the controller, but for the sake of keeping this example focused we've left the exception alone.
+  </p>
+</div>
+
+<div>
+  <h2>Low Level Iteratees</h2>
+  <p>
+    Iteratee is a state machine that processes data by going through intermediary states. The <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Iteratee">scaladoc</a> explains it clearly:
+  </p>
+  <p>
+    "At a high level, an Iteratee is just a function that takes a piece of input and returns either a final result or a new function that takes another piece of input. To represent this, an Iteratee can be in one of three states (see the <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Step">Step</a> trait): <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Done$">Done</a>, which means it contains a result and potentially some unconsumed part of the stream; <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Cont$">Cont</a>, which means it contains a function to be invoked to generate a new Iteratee from the next piece of input; <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Error$">Error</a>, which means it contains an error message and potentially some unconsumed part of the stream. One would expect to transform an Iteratee through the Cont state N times, eventually arriving at either the Done or Error state."
+  </p>
+  <p>
+    <a href="#code/app/iteratees/HelperIteratees.scala" class="shortcut">HelperIteratees.scala</a> contains low level Iteratees for either moving forward along the stream without producing anything (<a href="#code/app/iteratees/HelperIteratees.scala:8" class="shortcut">forwardAfter</a>) or producing a string or an array of bytes given some conditions (<a href="#code/app/iteratees/HelperIteratees.scala:24" class="shortcut">getUntil</a> and <a href="#code/app/iteratees/HelperIteratees.scala:32" class="shortcut">take</a>).<br>
+    These Iteratees are built using the <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Cont$">Cont</a> object which creates an Iteratee in the "cont" state. Inside, we only need to describe what happens when input is received.<br>
+    There are three types of input: <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Input$$Empty$">Input.Empty</a>, <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Input$$EOF$">Input.EOF</a> and <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Input$$El">Input.El</a>. For each of these cases we must return a new Iteratee that will handle the following step.
+    <ul>
+      <li><code>Input.Empty</code> means the stream didn’t provide any data, so we usually want to carry on, by recursively calling the same Iteratee.</li>
+      <li><code>Input.EOF</code> means the stream reached its end, so we return a new Iteratee in the "done" state, with any data that was built in the process (Unit in the case of <a href="#code/app/iteratees/HelperIteratees.scala:8" class="shortcut">forwardAfter</a>).</li>
+      <li><code>Input.El</code> is for when we receive data, so we do whatever we need with it, and either carry on with the next step or finish by returning a "done" state, depending on the logic.</li>
+    </ul>
+  </p>
+</div>
+<div>
+  <h2>Composing Iteratees</h2>
+  <p>
+    We can build higher level Iteratees by composing smaller ones, as illustrated in <a href="#code/app/models/Mp3File.scala" class="shortcut">Mp3File.scala</a>.
+  </p>
+  <p>
+    Iteratee follows a monadic structure, which means we can build a non-blocking pipeline tying together different Iteratees, each one specializing in smaller chunks of the stream. As a first approach we could call <a href="http://www.playframework.com/documentation/2.3.x/api/scala/index.html#play.api.libs.iteratee.Iteratee">Iteratee.flatMap</a> repeatedly to chain each Iteratee. Fortunately, Scala provides us with the ability to alternatively express monadic computations through for-comprehensions which results in very clean code, as shown in <a href="#code/app/models/Mp3File.scala:37" class="shortcut">tagParser</a>, <a href="#code/app/models/Mp3File.scala:59">ID3v2_2framesParser</a> and <a href="#code/app/models/Mp3File.scala:84">ID3v2_3framesParser</a>. Each of the steps (a.k.a. generators) inside these comprehensions follow this pattern: to the right of the "<-" we must have an <code>Iteratee[E, A]</code> and to the left of the "<-" the value produced by that Iteratee (a variable of type A).
+  </p>
+  <p>
+    The genrators in these methods show how the ID3 spec is expressed using Iteratees in different ways:
+    <ul>
+      <li>Just advancing the stream, discarding its data, like in the <code>forwardAfter</code> calls, where the variable is left as "_"</li>
+      <li>Generating a value through a simple call to an Iteratee helper like <code>getUntil</code>, and eventually performing some transformation on the produced value through a map call, like when calling <code>take(3) map bytes2PlainString</code></li>
+      <li>Not consuming data from the stream and just use the values produced in previous steps to perform some logic and advance to the next step just by returning a <code>Done[Byte, Unit]</code> Iteratee</li>
+      <li>Delegating a step of the parsing to a more specialized sub-parser. For example <a href="#code/app/models/Mp3File.scala:37" class="shortcut">tagParser</a> takes care of parsing the ID3 tag header, and it delegates the frames parsing to the appropriate subparser depending on the ID3 version found in the header.</li>
+    </ul>
+  </p>
+</div>
+<div>
+  <h2>Other Uses</h2>
+  <p>
+    We've seen how to use Iteratees to build custom body parsers that will hopefully help you manage the complexity that usually arises when following particular data format specs.
+  </p>
+  <p>
+    Also the approach followed here is a good example of how the reactive paradigm allows for better performance and smart use of resources. As mentioned above, a traditional approach to data parsing would imply unncessarily loading the entire file into memory, which implies a higher response time and a waste of RAM.
+  </p>
+  <p>
+    We encourage you to explore other usages of Iteratees besides data parsing. As of version 2.3 the Play framework allows handling <a href="http://www.playframework.com/documentation/2.3.x/ScalaWebSockets">WebSockets</a> through actors, which is a good abstraction for handling discrete messages. However for handling streams you still can use Iteratees.
+  </p>
+</div>
+</body>
+</html>
