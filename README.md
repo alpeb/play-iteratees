@@ -1,6 +1,8 @@
 Tutorial for Play Framework Iteratees
 =====================================
 
+[![Build Status](https://api.travis-ci.org/alpeb/play-iteratees.png?branch=master)](https://travis-ci.org/alpeb/play-iteratees)
+
 This is an [Activator](https://typesafe.com/activator) template showing how to use Play framework Iteratees to build a custom body parser in Scala, using as an example an MP3 file metadata parser.
 
 
